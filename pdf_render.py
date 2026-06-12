@@ -80,3 +80,15 @@ def save_image(arr: np.ndarray, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(arr).save(path)
     return path
+
+
+def save_jpeg(arr: np.ndarray, path: Path, long_edge: int, quality: int = config.JPEG_QUALITY) -> Path:
+    """Downscale a crop to *long_edge* and save as JPEG (what the AI receives)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    downscale_pil(arr, long_edge).convert("RGB").save(str(path), "JPEG", quality=quality)
+    return path
+
+
+def jpeg_b64(path: Path) -> str:
+    import base64
+    return base64.b64encode(Path(path).read_bytes()).decode("utf-8")

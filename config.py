@@ -40,7 +40,7 @@ def _float(name: str, default: float) -> float:
 
 # --- Models (spec: "<model>, <thinking_tokens>[, <max_output_tokens>]") -------
 IDENTITY_MODEL = os.getenv("IDENTITY_MODEL", "qwen3.7-plus, 2048, 512")
-ANSWERS_MODEL = os.getenv("ANSWERS_MODEL", "qwen3.7-plus, 0, 2000")
+ANSWERS_MODEL = os.getenv("ANSWERS_MODEL", "qwen3.7-plus, 2048, 3000")
 KEY_MODEL = os.getenv("KEY_MODEL", "qwen3.7-plus, 1024, 2048")
 
 # --- Rendering --------------------------------------------------------------

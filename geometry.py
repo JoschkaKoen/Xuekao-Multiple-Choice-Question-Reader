@@ -30,6 +30,8 @@ class Geometry:
     frame_source: str
     n_marks: int
     crops: dict = field(default_factory=dict)  # name -> color np.ndarray
+    marks: list = field(default_factory=list)  # detected Mark objects (debug)
+    rgb: object = None  # corrected (portrait) page; kept only for --debug-crops
 
     @property
     def fallback(self) -> bool:
@@ -45,4 +47,4 @@ def page_geometry(pdf_path, page_idx: int, dpi: int = config.DPI,
     frame, source = anchors.resolve_frame(rgb, marks, dpi)
     crop_boxes = config.crop_boxes_for_path(pdf_path)
     crops = {name: crop_frac(rgb, frame, box) for name, (box, _le) in crop_boxes.items()}
-    return Geometry(page_idx, rot, method, skew, frame, source, len(marks), crops)
+    return Geometry(page_idx, rot, method, skew, frame, source, len(marks), crops, marks, rgb)
