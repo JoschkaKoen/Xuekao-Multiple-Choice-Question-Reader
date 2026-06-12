@@ -40,7 +40,8 @@ def extract_key(client, model, provider, thinking, max_tokens, pdf_path) -> dict
 def normalize_key(d) -> dict:
     if not d or not isinstance(d.get("questions"), list):
         return {"subject": "", "questions": [], "total_questions": 0, "total_points": 0,
-                "valid": False, "problems": ["no questions parsed from key"]}
+                "valid": False, "confidence": 0, "problem": "no JSON returned",
+                "problems": ["no questions parsed from key"]}
     qs = []
     for it in d["questions"]:
         if not isinstance(it, dict):
@@ -61,9 +62,14 @@ def normalize_key(d) -> dict:
             continue
         seen.add(x["q"])
         uniq.append(x)
+    try:
+        conf = max(0, min(5, int(d.get("confidence", 0))))
+    except (TypeError, ValueError):
+        conf = 0
     key = {"subject": str(d.get("subject", "")).strip(), "questions": uniq,
            "total_questions": len(uniq),
-           "total_points": round(sum(x["points"] for x in uniq), 2)}
+           "total_points": round(sum(x["points"] for x in uniq), 2),
+           "confidence": conf, "problem": str(d.get("problem", "")).strip()}
     key["problems"] = validate_key(uniq)
     key["valid"] = bool(uniq) and not key["problems"]
     return key

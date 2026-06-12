@@ -21,10 +21,13 @@ def build_name_prompt(roster_names: list[str]) -> str:
         '- If there is no handwriting (blank) → "NONAME".\n'
         '- If there is writing but it is illegible → "UNREADABLE".\n'
         '- If you can read it but it matches no roster name → "NOMATCH".\n'
-        "- confidence: integer 0–5 (5 = certain).\n\n"
+        "- confidence: integer 0–5 (5 = certain).\n"
+        "- problem: a short note on any difficulty (ambiguous strokes, smudge, two plausible "
+        "matches), or an empty string.\n\n"
         "Return ONLY this JSON, no other text:\n"
         '{"matched_name": "<roster name or NONAME/UNREADABLE/NOMATCH>", '
-        '"raw_name": "<characters you read>", "confidence": <0-5>}'
+        '"raw_name": "<characters you read>", "confidence": <0-5>, '
+        '"problem": "<short note or empty>"}'
     )
 
 
@@ -40,10 +43,12 @@ def build_class_prompt(allowed: list[str]) -> str:
         "they wrote (it will be normalized later); prefer the EMP form if both are plausible.\n"
         "- Ignore the printed label 班级; read only the handwriting.\n"
         '- If blank → "NONE". If illegible → "UNREADABLE". If it matches none → "NOMATCH".\n'
-        "- confidence: integer 0–5.\n\n"
+        "- confidence: integer 0–5.\n"
+        "- problem: a short note on any difficulty, or an empty string.\n\n"
         "Return ONLY this JSON:\n"
         '{"class": "<one allowed label or NONE/UNREADABLE/NOMATCH>", '
-        '"class_raw": "<characters you read>", "confidence": <0-5>}'
+        '"class_raw": "<characters you read>", "confidence": <0-5>, '
+        '"problem": "<short note or empty>"}'
     )
 
 
@@ -83,8 +88,10 @@ def build_key_prompt() -> str:
         '- "correct": list of correct option letters — ONE letter for single-answer questions, '
         "TWO for 双项选择题 questions\n"
         '- "points": points for that question, read from its section header (每小题X分)\n\n'
-        "Ignore the 非选择题 / 主观题 / essay section entirely.\n\n"
+        "Ignore the 非选择题 / 主观题 / essay section entirely.\n"
+        "Also report overall confidence (0–5) and a short problem note (or empty string).\n\n"
         "Return ONLY this JSON:\n"
         '{"subject": "<e.g. 历史>", "total_questions": <int>, '
-        '"questions": [{"q": 1, "correct": ["C"], "points": 2}, ...]}'
+        '"questions": [{"q": 1, "correct": ["C"], "points": 2}, ...], '
+        '"confidence": <0-5>, "problem": "<short note or empty>"}'
     )

@@ -121,17 +121,21 @@ def _review_flags(rec: dict) -> list[str]:
     flags = []
     nm, cl, an = rec["name"], rec["cls"], rec["ans"]
     if nm["matched_name"] in ("NONAME", "UNREADABLE", "NOMATCH"):
-        flags.append(f"name={nm['matched_name']}(raw={nm['raw_name']!r})")
+        flags.append(f"name={nm['matched_name']}(raw={nm.get('raw_name', '')!r})")
     elif nm["confidence"] <= config.LOW_CONFIDENCE:
         flags.append(f"name low-conf={nm['confidence']}")
+    if nm.get("problem"):
+        flags.append(f"name note: {nm['problem']}")
     if cl["class_norm"] in ("NONE", "UNREADABLE", "NOMATCH"):
-        flags.append(f"class={cl['class_norm']}(raw={cl['class_raw']!r})")
+        flags.append(f"class={cl['class_norm']}(raw={cl.get('class_raw', '')!r})")
     elif cl["confidence"] <= config.LOW_CONFIDENCE:
         flags.append(f"class low-conf={cl['confidence']}")
+    if cl.get("problem"):
+        flags.append(f"class note: {cl['problem']}")
     if an["confidence"] <= config.LOW_CONFIDENCE:
         flags.append(f"answers low-conf={an['confidence']}")
     if an.get("problem"):
-        flags.append(f"answers: {an['problem']}")
+        flags.append(f"answers note: {an['problem']}")
     if rec.get("geom") and rec["geom"].get("frame_source") not in (None, "marks"):
         flags.append(f"anchor fallback={rec['geom']['frame_source']}")
     score = rec.get("score")
@@ -144,16 +148,21 @@ def _review_flags(rec: dict) -> list[str]:
 
 
 def _review_sheet(ws, records, key, roster, low_conf):
-    _header(ws, ["Type", "序号", "Sheet", "Name", "Class", "Detail"])
+    _header(ws, ["Type", "序号", "Sheet", "Name", "Class", "N.conf", "C.conf", "A.conf", "Detail"])
     # key problems first
     if not key.get("valid", False):
-        ws.append(["KEY", "", "", "", "", "; ".join(key.get("problems", [])) or "invalid key"])
+        ws.append(["KEY", "", "", "", "", "", "", key.get("confidence", ""),
+                   "; ".join(key.get("problems", [])) or "invalid key"])
+    elif key.get("problem"):
+        ws.append(["KEY", "", "", "", "", "", "", key.get("confidence", ""),
+                   f"key note: {key['problem']}"])
     # absentees: roster names with no matched sheet
     matched = {_name_disp(r) for r in records
                if r["name"]["matched_name"] not in ("NONAME", "UNREADABLE", "NOMATCH")}
     for nm in roster:
         if nm not in matched:
-            ws.append(["ABSENT", _serial(nm, roster), "", nm, "", "no sheet matched this roster name"])
+            ws.append(["ABSENT", _serial(nm, roster), "", nm, "", "", "", "",
+                       "no sheet matched this roster name"])
     # duplicate matches (same roster name on >1 sheet)
     from collections import Counter
     cnt = Counter(_name_disp(r) for r in records
@@ -166,10 +175,11 @@ def _review_sheet(ws, records, key, roster, low_conf):
             flags.insert(0, "DUPLICATE name match")
         if flags:
             ws.append(["FLAG", _serial(_name_disp(rec), roster), rec["page"],
-                       _name_disp(rec), _class_disp(rec), "; ".join(flags)])
+                       _name_disp(rec), _class_disp(rec), rec["name"]["confidence"],
+                       rec["cls"]["confidence"], rec["ans"]["confidence"], "; ".join(flags)])
     ws.freeze_panes = "A2"
     ws.column_dimensions["D"].width = 12
-    ws.column_dimensions["F"].width = 70
+    ws.column_dimensions["I"].width = 70
 
 
 def write_workbook(records, key, stats, roster, out_path, low_conf=None):

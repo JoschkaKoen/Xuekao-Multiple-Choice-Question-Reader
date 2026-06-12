@@ -51,18 +51,23 @@ def _conf(d: dict, default: int = 0) -> int:
         return default
 
 
+def _problem(d: dict) -> str:
+    return str(d.get("problem", "")).strip()
+
+
 def read_name(client, model, provider, b64, roster_names, thinking=0, max_tokens=None) -> dict:
     raw = ai_image_call(client, b64, prompts.build_name_prompt(roster_names),
                         model_id=model, provider=provider,
                         max_tokens=max_tokens or 512, thinking_tokens=thinking)
     d = parse_json(raw)
     if d is None:
-        return {"matched_name": "UNREADABLE", "raw_name": "", "confidence": 0}
+        return {"matched_name": "UNREADABLE", "raw_name": "", "confidence": 0,
+                "problem": "no JSON returned"}
     name = str(d.get("matched_name", "")).strip()
     if name not in NAME_SENTINELS and name not in set(roster_names):
         name = "NOMATCH"  # exact set-membership guard (not fuzzy)
     return {"matched_name": name, "raw_name": str(d.get("raw_name", "")).strip(),
-            "confidence": _conf(d)}
+            "confidence": _conf(d), "problem": _problem(d)}
 
 
 def read_class(client, model, provider, b64, thinking=0, max_tokens=None) -> dict:
@@ -71,7 +76,8 @@ def read_class(client, model, provider, b64, thinking=0, max_tokens=None) -> dic
                         max_tokens=max_tokens or 256, thinking_tokens=thinking)
     d = parse_json(raw)
     if d is None:
-        return {"class_norm": "UNREADABLE", "class_raw": "", "confidence": 0}
+        return {"class_norm": "UNREADABLE", "class_raw": "", "confidence": 0,
+                "problem": "no JSON returned"}
     cls = str(d.get("class", "")).strip().upper()
     if cls in CLASS_SENTINELS:
         norm = cls
@@ -80,7 +86,7 @@ def read_class(client, model, provider, b64, thinking=0, max_tokens=None) -> dic
     else:
         norm = "NOMATCH"
     return {"class_norm": norm, "class_raw": str(d.get("class_raw", "")).strip(),
-            "confidence": _conf(d)}
+            "confidence": _conf(d), "problem": _problem(d)}
 
 
 def read_answers(client, model, provider, b64, thinking=0, max_tokens=None,
