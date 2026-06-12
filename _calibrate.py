@@ -45,6 +45,7 @@ def main():
     pages = [int(x) - 1 for x in (sys.argv[2].split(",") if len(sys.argv) > 2 else ["1"])]
     grid = "grid" in sys.argv
     cfg = config.for_folder(folder)
+    crop_boxes = config.crop_boxes_for_folder(folder)
     outdir = cfg.debug_dir
     outdir.mkdir(parents=True, exist_ok=True)
     for p in pages:
@@ -57,12 +58,12 @@ def main():
         fw, fh = fx1 - fx0, fy1 - fy0
         crops_px = {name: (int(fx0 + box[0] * fw), int(fy0 + box[1] * fh),
                            int(fx0 + box[2] * fw), int(fy0 + box[3] * fh))
-                    for name, (box, _le) in config.CROP_BOXES.items()}
+                    for name, (box, _le) in crop_boxes.items()}
         ov = anchors.debug_overlay(rgb, marks, frame, crops_px)
         pdf_render.save_image(ds(ov), outdir / f"overlay_p{p+1}.png")
         if grid:
             pdf_render.save_image(ds(draw_grid(rgb, frame)), outdir / f"grid_p{p+1}.png")
-        for name, (box, _le) in config.CROP_BOXES.items():
+        for name, (box, _le) in crop_boxes.items():
             pdf_render.save_image(crop_frac(rgb, frame, box), outdir / f"{name}_p{p+1}.png")
         print(f"p{p+1}: {rgb.shape[1]}x{rgb.shape[0]} rot={rot}({method}) skew={skew:.2f} "
               f"marks={len(marks)} frame={frame} src={source}")

@@ -43,5 +43,6 @@ def page_geometry(pdf_path, page_idx: int, dpi: int = config.DPI,
     rgb, skew = deskew_color(rgb, to_gray(rgb))
     marks = anchors.find_marks(rgb, dpi)
     frame, source = anchors.resolve_frame(rgb, marks, dpi)
-    crops = {name: crop_frac(rgb, frame, box) for name, (box, _le) in config.CROP_BOXES.items()}
+    crop_boxes = config.crop_boxes_for_path(pdf_path)
+    crops = {name: crop_frac(rgb, frame, box) for name, (box, _le) in crop_boxes.items()}
     return Geometry(page_idx, rot, method, skew, frame, source, len(marks), crops)
