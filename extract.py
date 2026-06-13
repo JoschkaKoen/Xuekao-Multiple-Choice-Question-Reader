@@ -55,11 +55,24 @@ def _problem(d: dict) -> str:
     return str(d.get("problem", "")).strip()
 
 
+def _call_and_parse(client, b64, prompt, model, provider, max_tokens, thinking):
+    """Vision call → parsed JSON dict, retrying ONCE if the content doesn't parse
+    (the model occasionally returns prose/empty instead of JSON — not an API
+    error, so retry_api_call doesn't catch it)."""
+    for attempt in range(2):
+        raw = ai_image_call(client, b64, prompt, model_id=model, provider=provider,
+                            max_tokens=max_tokens, thinking_tokens=thinking)
+        d = parse_json(raw)
+        if d is not None:
+            return d
+        if attempt == 0:
+            log.warning("[%s] empty/unparseable JSON — retrying once", model)
+    return None
+
+
 def read_name(client, model, provider, b64, roster_names, thinking=0, max_tokens=None) -> dict:
-    raw = ai_image_call(client, b64, prompts.build_name_prompt(roster_names),
-                        model_id=model, provider=provider,
-                        max_tokens=max_tokens or 512, thinking_tokens=thinking)
-    d = parse_json(raw)
+    d = _call_and_parse(client, b64, prompts.build_name_prompt(roster_names),
+                        model, provider, max_tokens or 512, thinking)
     if d is None:
         return {"matched_name": "UNREADABLE", "raw_name": "", "confidence": 0,
                 "problem": "no JSON returned"}
@@ -71,10 +84,8 @@ def read_name(client, model, provider, b64, roster_names, thinking=0, max_tokens
 
 
 def read_class(client, model, provider, b64, thinking=0, max_tokens=None) -> dict:
-    raw = ai_image_call(client, b64, prompts.build_class_prompt(config.CLASS_ALLOWED),
-                        model_id=model, provider=provider,
-                        max_tokens=max_tokens or 256, thinking_tokens=thinking)
-    d = parse_json(raw)
+    d = _call_and_parse(client, b64, prompts.build_class_prompt(config.CLASS_ALLOWED),
+                        model, provider, max_tokens or 256, thinking)
     if d is None:
         return {"class_norm": "UNREADABLE", "class_raw": "", "confidence": 0,
                 "problem": "no JSON returned"}
@@ -82,7 +93,7 @@ def read_class(client, model, provider, b64, thinking=0, max_tokens=None) -> dic
     if cls in CLASS_SENTINELS:
         norm = cls
     elif cls in config.CLASS_ALLOWED:
-        norm = config.CLASS_ALIASES.get(cls, cls)
+        norm = cls  # output the matched label as written (no EMP/A28xx conversion)
     else:
         norm = "NOMATCH"
     return {"class_norm": norm, "class_raw": str(d.get("class_raw", "")).strip(),
@@ -91,10 +102,8 @@ def read_class(client, model, provider, b64, thinking=0, max_tokens=None) -> dic
 
 def read_answers(client, model, provider, b64, thinking=0, max_tokens=None,
                  n_questions=None, double_qs=None) -> dict:
-    raw = ai_image_call(client, b64, prompts.build_answers_prompt(n_questions, double_qs),
-                        model_id=model, provider=provider,
-                        max_tokens=max_tokens or 2000, thinking_tokens=thinking)
-    d = parse_json(raw)
+    d = _call_and_parse(client, b64, prompts.build_answers_prompt(n_questions, double_qs),
+                        model, provider, max_tokens or 2000, thinking)
     if d is None:
         return {"answers": {}, "confidence": 0, "problem": "no JSON returned"}
     answers: dict[str, list[str]] = {}

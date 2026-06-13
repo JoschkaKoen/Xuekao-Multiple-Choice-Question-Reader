@@ -56,12 +56,12 @@ MAX_WORKERS = _int("MAX_WORKERS", 64)
 GEOM_WORKERS = _int("GEOM_WORKERS", 6)
 LOW_CONFIDENCE = _int("LOW_CONFIDENCE", 2)
 
-# --- Class normalization (set: EMP1–EMP3 / A2801–A2804, prefer EMP) ----------
-# The AI matches the class field to one CLASS_ALLOWED label; we also store a
-# normalized EMP-preferred value via CLASS_ALIASES. The A2804↔EMP question
-# (counts differ 3 vs 4) is confirmed on the test sheets; default keeps A2804.
+# --- Class field --------------------------------------------------------------
+# Match the class to one of these labels AS WRITTEN — no forced conversion
+# between the EMP and A28xx notations (the two are just alternative names; which
+# homeroom maps to which EMP doesn't matter for output). The prompt only prefers
+# the EMP form when a student writes both.
 CLASS_ALLOWED = ["EMP1", "EMP2", "EMP3", "A2801", "A2802", "A2803", "A2804"]
-CLASS_ALIASES = {"A2801": "EMP1", "A2802": "EMP2", "A2803": "EMP3", "A2804": "A2804"}
 
 # --- Black-mark anchor detection (tuned in calibration Step 1) ---------------
 # A pixel is "black" if all of R,G,B < MARK_BLACK_MAX (timing squares + ink;
@@ -131,6 +131,7 @@ def for_folder(name: str) -> FolderCfg:
     """Resolve all paths for input folder *name* (e.g. 'input_files_1')."""
     base = PROJECT_DIR / name
     out = PROJECT_DIR / "out" / name
+    suffix = name.split("_")[-1]  # "1" / "2" from input_files_1 / input_files_2
     return FolderCfg(
         name=name,
         first_page=base / "first_page.pdf",
@@ -141,5 +142,5 @@ def for_folder(name: str) -> FolderCfg:
         crops_dir=out / "crops",
         debug_dir=out / "debug",
         log_path=out / "run.log",
-        results_xlsx=out / "results.xlsx",
+        results_xlsx=out / f"results_{suffix}.xlsx",
     )

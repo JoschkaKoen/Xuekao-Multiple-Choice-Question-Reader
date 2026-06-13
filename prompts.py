@@ -20,7 +20,12 @@ def build_name_prompt(roster_names: list[str]) -> str:
         "- Ignore the printed label 姓名 itself; read only the handwriting.\n"
         '- If there is no handwriting (blank) → "NONAME".\n'
         '- If there is writing but it is illegible → "UNREADABLE".\n'
-        '- If you can read it but it matches no roster name → "NOMATCH".\n'
+        '- If you can read the handwriting but its characters do not CLEARLY correspond to a roster '
+        'name, return "NOMATCH" (put your reading in raw_name). Do NOT snap to the visually nearest '
+        "roster name — a wrong match corrupts that student's record, so NOMATCH for manual review is "
+        "strongly preferred over guessing.\n"
+        "- Two different students may share the same name; match only the characters you actually see, "
+        "and do not avoid a name just because it might already be used.\n"
         "- confidence: integer 0–5 (5 = certain).\n"
         "- problem: a short note on any difficulty (ambiguous strokes, smudge, two plausible "
         "matches), or an empty string.\n\n"

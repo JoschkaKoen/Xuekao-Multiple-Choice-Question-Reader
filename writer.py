@@ -55,7 +55,8 @@ def _answers_sheet(ws, records, key, roster):
     ws.title = "Answers"
     qs = [it["q"] for it in key["questions"]]
     total = key["total_points"]
-    head = ["序号", "Sheet", "Name", "Class"] + [f"Q{q}" for q in qs] + ["#Correct", f"Score/{total:g}"]
+    head = (["序号", "Sheet", "Name", "Class"] + [f"Q{q}" for q in qs]
+            + ["#Correct", f"Score/{total:g}", "%"])
     _header(ws, head)
     # official-answer reference row
     ws.cell(row=2, column=3, value="official answers →").font = BOLD
@@ -81,6 +82,8 @@ def _answers_sheet(ws, records, key, roster):
             c.fill = _TAG_FILL.get(tag, YELLOW)
         ws.cell(row=r, column=5 + len(qs), value=score.n_correct).alignment = CENTER
         ws.cell(row=r, column=5 + len(qs) + 1, value=score.total).alignment = CENTER
+        pct = round(score.total / total * 100, 1) if total else 0.0
+        ws.cell(row=r, column=5 + len(qs) + 2, value=pct).alignment = CENTER
         r += 1
 
     ws.freeze_panes = "E3"
@@ -88,19 +91,21 @@ def _answers_sheet(ws, records, key, roster):
     ws.column_dimensions["D"].width = 8
 
 
-def _marks_sheet(ws, records, roster):
-    _header(ws, ["Rank", "序号", "Name", "Class", "Score", "#Correct", "Flags"])
+def _marks_sheet(ws, records, roster, max_points):
+    # "Sheet" = the page in first_page.pdf, so a student's paper is one lookup away.
+    _header(ws, ["Rank", "序号", "Sheet", "Name", "Class", "Score", "%", "#Correct", "Flags"])
     rows = []
     for rec in records:
-        rows.append((rec["score"].total, rec["score"].n_correct, _name_disp(rec),
-                     _class_disp(rec), rec))
-    rows.sort(key=lambda t: (-t[0], -t[1], t[2]))
-    for i, (total, ncorr, name, cls, rec) in enumerate(rows, 1):
+        rows.append((rec["score"].total, rec["score"].n_correct, rec["page"],
+                     _name_disp(rec), _class_disp(rec), rec))
+    rows.sort(key=lambda t: (-t[0], -t[1], t[3]))
+    for i, (total, ncorr, page, name, cls, rec) in enumerate(rows, 1):
         flags = "; ".join(_review_flags(rec))
-        ws.append([i, _serial(name, roster), name, cls, total, ncorr, flags])
+        pct = round(total / max_points * 100, 1) if max_points else 0.0
+        ws.append([i, _serial(name, roster), page, name, cls, total, pct, ncorr, flags])
     ws.freeze_panes = "A2"
-    ws.column_dimensions["C"].width = 12
-    ws.column_dimensions["G"].width = 40
+    ws.column_dimensions["D"].width = 12
+    ws.column_dimensions["I"].width = 40
 
 
 def _perq_sheet(ws, stats, key):
@@ -120,34 +125,41 @@ def _perq_sheet(ws, stats, key):
 def _review_flags(rec: dict) -> list[str]:
     flags = []
     nm, cl, an = rec["name"], rec["cls"], rec["ans"]
-    if nm["matched_name"] in ("NONAME", "UNREADABLE", "NOMATCH"):
+    name_flagged = nm["matched_name"] in ("NONAME", "UNREADABLE", "NOMATCH")
+    if name_flagged:
         flags.append(f"name={nm['matched_name']}(raw={nm.get('raw_name', '')!r})")
     elif nm["confidence"] <= config.LOW_CONFIDENCE:
         flags.append(f"name low-conf={nm['confidence']}")
-    if nm.get("problem"):
+        name_flagged = True
+    # Only surface the AI's name note when the name still needs attention — not
+    # for confident matches or names we've fixed by hand (override clears it).
+    if name_flagged and nm.get("problem"):
         flags.append(f"name note: {nm['problem']}")
-    if cl["class_norm"] in ("NONE", "UNREADABLE", "NOMATCH"):
-        flags.append(f"class={cl['class_norm']}(raw={cl.get('class_raw', '')!r})")
-    elif cl["confidence"] <= config.LOW_CONFIDENCE:
-        flags.append(f"class low-conf={cl['confidence']}")
-    if cl.get("problem"):
-        flags.append(f"class note: {cl['problem']}")
-    if an["confidence"] <= config.LOW_CONFIDENCE:
+    # Class is flagged ONLY when the AI struggled to READ it (low confidence).
+    # A confidently-read class — including a confidently-blank field or a clear
+    # but unmappable scrawl — needs no remark; the class label isn't important.
+    if cl["confidence"] <= config.LOW_CONFIDENCE:
+        flags.append(f"class low-conf={cl['confidence']}(raw={cl.get('class_raw', '')!r})")
+    # Answer note only when the read itself is uncertain — routine under/over
+    # marking is genuine (correct 0 per 少选/多选不得分) and shown tersely below.
+    ans_low = an["confidence"] <= config.LOW_CONFIDENCE
+    if ans_low:
         flags.append(f"answers low-conf={an['confidence']}")
-    if an.get("problem"):
-        flags.append(f"answers note: {an['problem']}")
+        if an.get("problem"):
+            flags.append(f"answers note: {an['problem']}")
     if rec.get("geom") and rec["geom"].get("frame_source") not in (None, "marks"):
         flags.append(f"anchor fallback={rec['geom']['frame_source']}")
+    # Under-/over-filling is a STUDENT issue (correctly scored 0 per 少选/多选不得分),
+    # NOT an AI read problem, so it is not flagged. Only read-coverage gaps
+    # (missing/extra question numbers) are surfaced — those mean the AI didn't
+    # read every question.
     score = rec.get("score")
     if score:
         flags.extend(score.problems)
-        anomalies = [t for (_m, t, _p) in score.per_q.values() if t in ("over", "under")]
-        if anomalies:
-            flags.append(f"{len(anomalies)} over/under marks")
     return flags
 
 
-def _review_sheet(ws, records, key, roster, low_conf):
+def _review_sheet(ws, records, key, roster, low_conf, full_run=True):
     _header(ws, ["Type", "序号", "Sheet", "Name", "Class", "N.conf", "C.conf", "A.conf", "Detail"])
     # key problems first
     if not key.get("valid", False):
@@ -156,13 +168,18 @@ def _review_sheet(ws, records, key, roster, low_conf):
     elif key.get("problem"):
         ws.append(["KEY", "", "", "", "", "", "", key.get("confidence", ""),
                    f"key note: {key['problem']}"])
-    # absentees: roster names with no matched sheet
+    # absentees: roster names with no matched sheet — only meaningful on a full run
     matched = {_name_disp(r) for r in records
                if r["name"]["matched_name"] not in ("NONAME", "UNREADABLE", "NOMATCH")}
-    for nm in roster:
-        if nm not in matched:
-            ws.append(["ABSENT", _serial(nm, roster), "", nm, "", "", "", "",
-                       "no sheet matched this roster name"])
+    if full_run:
+        for nm in roster:
+            if nm not in matched:
+                ws.append(["ABSENT", _serial(nm, roster), "", nm, "", "", "", "",
+                           "no sheet matched this roster name"])
+    else:
+        ws.append(["INFO", "", "", "", "", "", "", "",
+                   f"partial run ({len(records)} sheets) — absentee list suppressed "
+                   "(run the full folder to list absentees)"])
     # duplicate matches (same roster name on >1 sheet)
     from collections import Counter
     cnt = Counter(_name_disp(r) for r in records
@@ -182,14 +199,14 @@ def _review_sheet(ws, records, key, roster, low_conf):
     ws.column_dimensions["I"].width = 70
 
 
-def write_workbook(records, key, stats, roster, out_path, low_conf=None):
+def write_workbook(records, key, stats, roster, out_path, low_conf=None, full_run=True):
     if low_conf is None:
         low_conf = config.LOW_CONFIDENCE
     wb = openpyxl.Workbook()
     _answers_sheet(wb.active, records, key, roster)
     _marks_sheet(wb.create_sheet("Marks"), records, roster)
     _perq_sheet(wb.create_sheet("Per-question"), stats, key)
-    _review_sheet(wb.create_sheet("Review"), records, key, roster, low_conf)
+    _review_sheet(wb.create_sheet("Review"), records, key, roster, low_conf, full_run)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out_path))
     log.info("wrote %s (%d students)", out_path.name, len(records))

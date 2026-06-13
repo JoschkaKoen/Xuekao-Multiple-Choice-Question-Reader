@@ -147,11 +147,107 @@ def run_pipeline(cfg, pages, args):
         score = grade.grade_student(an["answers"], key)
         records.append({"page": p + 1, "name": nm, "cls": cl, "ans": an,
                         "geom": geomd, "score": score})
+    _apply_name_overrides(cfg, records)
     stats = grade.item_stats([r["score"] for r in records], key)
-    writer.write_workbook(records, key, stats, names, cfg.results_xlsx)
+    writer.write_workbook(records, key, stats, names, cfg.results_xlsx,
+                          full_run=(len(pages) == total))
     cost.write_report(cfg.out_dir)
     cost.log_summary()
     log.info("DONE → %s", cfg.results_xlsx)
+
+
+def run_name_check(cfg, pages, args):
+    """Geometry + NAME matching only (no key/class/answers). Writes name_check.csv."""
+    usage.reset()
+    names = roster_mod.load_roster(cfg.roster)
+    if not names:
+        raise SystemExit("Empty roster — cannot match names.")
+    clients = _clients()
+    boxes = config.crop_boxes_for_path(cfg.first_page)
+    redo = set(args.redo or [])
+    total = page_count(cfg.first_page)
+    log.info("NAME CHECK: %s — %d pages", cfg.name, len(pages))
+    global_rot = orient.global_rotation(cfg.first_page, total, config.ORIENT_DPI)
+    log.info("global orientation vote: rot=%d", global_rot)
+    gworkers = max(1, min(config.GEOM_WORKERS, len(pages)))
+    with ThreadPoolExecutor(max_workers=gworkers, thread_name_prefix="geom") as ex:
+        list(ex.map(lambda p: run_geometry(cfg, p, boxes, global_rot, args.fresh, redo,
+                                           args.debug_crops), pages))
+    progress = Progress(len(pages))
+    results: dict[int, dict] = {}
+    workers = max(1, min(config.MAX_WORKERS, len(pages)))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ai") as ex:
+        futs = {ex.submit(_field_task, cfg, "name", p, clients, names, None, None, args, redo,
+                          progress): p for p in pages}
+        for fut in as_completed(futs):
+            results[futs[fut]] = fut.result()
+    _name_report(cfg, pages, results, names)
+    cost.write_report(cfg.out_dir)
+    cost.log_summary()
+
+
+def _name_report(cfg, pages, results, roster):
+    import csv
+    from collections import Counter
+    SENT = ("NONAME", "UNREADABLE", "NOMATCH")
+    rows, matched = [], []
+    for p in sorted(pages):
+        r = results[p]
+        mn = r["matched_name"]
+        rows.append([p + 1, mn, r.get("raw_name", ""), r.get("confidence", 0), r.get("problem", "")])
+        if mn not in SENT:
+            matched.append(mn)
+    out = cfg.out_dir / "name_check.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["sheet", "matched_name", "raw_name", "confidence", "problem"])
+        w.writerows(rows)
+    cnt = Counter(matched)
+    dups = {n: c for n, c in cnt.items() if c > 1}
+    unmatched_roster = [n for n in roster if n not in cnt]
+    probs = [r for r in rows if r[1] in SENT or r[3] <= config.LOW_CONFIDENCE]
+    log.info("── NAME CHECK summary (%s) ─────────────────────", cfg.name)
+    log.info("  %d sheets: matched=%d  NOMATCH=%d  NONAME=%d  UNREADABLE=%d  (low-conf≤%d: %d)",
+             len(pages), len(matched),
+             sum(r[1] == "NOMATCH" for r in rows), sum(r[1] == "NONAME" for r in rows),
+             sum(r[1] == "UNREADABLE" for r in rows), config.LOW_CONFIDENCE,
+             sum(1 for r in rows if r[1] not in SENT and r[3] <= config.LOW_CONFIDENCE))
+    if dups:
+        log.info("  DUPLICATE matches (same name on >1 sheet): %s", dups)
+    if probs:
+        log.info("  sheets needing review (%d):", len(probs))
+        for sheet, mn, raw, c, pr in probs:
+            log.info("    sheet %d: %s (raw=%r conf=%d) %s", sheet, mn, raw, c, pr)
+    log.info("  roster names with NO matched sheet (%d): %s",
+             len(unmatched_roster), "、".join(unmatched_roster) or "—")
+    log.info("  report → %s", out)
+
+
+def _apply_name_overrides(cfg, records) -> None:
+    """Apply manual name corrections from out/<folder>/name_overrides.json
+    ({"<sheet>": "<name>"}). Kept separate from AI caches so re-runs don't lose
+    them and the file is an audit trail. Sheet = 1-based page in first_page.pdf.
+    """
+    ov = jsonstore.read_json(cfg.out_dir / "name_overrides.json") or {}
+    if not ov:
+        return
+    by_page = {r["page"]: r for r in records}
+    applied = 0
+    for k, v in ov.items():
+        try:
+            page = int(k)
+        except (TypeError, ValueError):
+            continue
+        rec = by_page.get(page)
+        if rec and str(v).strip():
+            old = rec["name"].get("matched_name")
+            rec["name"] = {**rec["name"], "matched_name": str(v).strip(),
+                           "confidence": 5, "problem": "", "override": True,
+                           "override_from": old}
+            applied += 1
+    if applied:
+        log.info("applied %d manual name override(s) from name_overrides.json", applied)
 
 
 def _get_key(cfg, key_client, args, redo) -> dict:
@@ -197,6 +293,9 @@ def main(argv=None) -> int:
     ap.add_argument("--limit", type=int, help="process at most N pages")
     ap.add_argument("--debug-crops", action="store_true", help="also save anchor/crop overlays")
     ap.add_argument("--geometry-only", action="store_true", help="Stage A only, no AI")
+    ap.add_argument("--names-only", action="store_true",
+                    help="crop + match the NAME field for all pages only (no key/class/answers); "
+                         "writes name_check.csv + a match summary")
     ap.add_argument("--fresh", action="store_true", help="ignore caches, recompute everything")
     ap.add_argument("--redo", action="append",
                     choices=["geometry", "key", "name", "class", "answers"],
@@ -219,7 +318,10 @@ def main(argv=None) -> int:
         pages = pages[: args.limit]
     if not pages:
         raise SystemExit("no pages selected")
-    run_pipeline(cfg, pages, args)
+    if args.names_only:
+        run_name_check(cfg, pages, args)
+    else:
+        run_pipeline(cfg, pages, args)
     return 0
 
 
