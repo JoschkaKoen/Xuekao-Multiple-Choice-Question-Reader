@@ -103,12 +103,13 @@ def log_summary() -> None:
     log.info("  TOTAL: ¥%.4f", total)
 
 
-def write_report(out_dir: Path) -> Path | None:
+def write_report(out_dir: Path, suffix: str = "") -> Path | None:
     u = usage_mod.snapshot()
     if not u:
         return None
     total, bd = compute_cost(u)
     out_dir.mkdir(parents=True, exist_ok=True)
+    tag = f"_{suffix}" if suffix else ""
     payload = {
         "token_usage": bd,
         "total_input_tokens": sum(v["input_tokens"] for v in bd.values()),
@@ -117,7 +118,7 @@ def write_report(out_dir: Path) -> Path | None:
         "total_calls": sum(v["calls"] for v in bd.values()),
         "total_cost_rmb": total,
     }
-    (out_dir / "cost.json").write_text(
+    (out_dir / f"cost{tag}.json").write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     lines = [
@@ -139,5 +140,5 @@ def write_report(out_dir: Path) -> Path | None:
     lines.append("")
     lines.append("_Output tokens include thinking; the Thinking column is informational. "
                  "Rates: RMB/1M tokens (eXercise 'AI API costs.xlsx')._")
-    (out_dir / "cost.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return out_dir / "cost.json"
+    (out_dir / f"cost{tag}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out_dir / f"cost{tag}.json"

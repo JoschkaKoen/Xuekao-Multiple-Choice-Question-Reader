@@ -71,13 +71,15 @@ def _clients():
 def run_geometry(cfg, page_idx, boxes, global_rot, fresh, redo, debug_crops) -> dict:
     geom_path = cfg.cache_dir / f"geom_p{page_idx + 1}.json"
     crop_paths = {f: cfg.crops_dir / f"p{page_idx + 1}_{f}.jpg" for f in boxes}
+    corrected_path = cfg.corrected_dir / f"p{page_idx + 1}.jpg"
     if (not fresh and "geometry" not in redo and jsonstore.valid(geom_path)
-            and all(p.exists() for p in crop_paths.values())):
+            and all(p.exists() for p in crop_paths.values()) and corrected_path.exists()):
         log.info("geom p%d: cache hit", page_idx + 1)
         return jsonstore.read_json(geom_path)
     g = page_geometry(cfg.first_page, page_idx, config.DPI, global_rot)
     for field, (_box, long_edge) in boxes.items():
         save_jpeg(g.crops[field], crop_paths[field], long_edge)
+    save_jpeg(g.rgb, corrected_path, config.CORRECTED_LONG_EDGE, quality=85)  # full corrected scan
     if debug_crops:
         fx0, fy0, fx1, fy1 = g.frame
         fw, fh = fx1 - fx0, fy1 - fy0
@@ -92,6 +94,28 @@ def run_geometry(cfg, page_idx, boxes, global_rot, fresh, redo, debug_crops) -> 
     log.info("geom p%d: rot=%d(%s) skew=%.2f marks=%d src=%s", page_idx + 1, g.rotation_cw,
              g.orient_method, g.skew_deg, g.n_marks, g.frame_source)
     return geomd
+
+
+def _build_corrected_pdf(cfg, pages):
+    """Assemble the saved rotation-corrected page images into one PDF per folder."""
+    import fitz
+    out = cfg.out_dir / f"output_{cfg.suffix}.pdf"
+    doc = fitz.open()
+    added = 0
+    for p in sorted(pages):
+        ip = cfg.corrected_dir / f"p{p + 1}.jpg"
+        if not ip.exists():
+            continue
+        with fitz.open(str(ip)) as img:
+            pdfbytes = img.convert_to_pdf()
+        with fitz.open("pdf", pdfbytes) as ipdf:
+            doc.insert_pdf(ipdf)
+        added += 1
+    if added:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(str(out))
+        log.info("corrected scan → %s (%d pages)", out.name, added)
+    doc.close()
 
 
 # --- Stage B: AI ------------------------------------------------------------
@@ -113,8 +137,9 @@ def run_pipeline(cfg, pages, args):
     with ThreadPoolExecutor(max_workers=gworkers, thread_name_prefix="geom") as ex:
         list(ex.map(lambda p: run_geometry(cfg, p, boxes, global_rot, args.fresh, redo,
                                            args.debug_crops), pages))
+    _build_corrected_pdf(cfg, pages)
     if args.geometry_only:
-        log.info("geometry-only: crops + overlays in %s", cfg.out_dir)
+        log.info("geometry-only: crops + corrected scan + overlays in %s", cfg.out_dir)
         return
 
     # Key extraction first (1 call) → drives N + weights; validate before grading.
@@ -151,7 +176,7 @@ def run_pipeline(cfg, pages, args):
     stats = grade.item_stats([r["score"] for r in records], key)
     writer.write_workbook(records, key, stats, names, cfg.results_xlsx,
                           full_run=(len(pages) == total))
-    cost.write_report(cfg.out_dir)
+    cost.write_report(cfg.out_dir, cfg.suffix)
     cost.log_summary()
     log.info("DONE → %s", cfg.results_xlsx)
 
@@ -173,6 +198,7 @@ def run_name_check(cfg, pages, args):
     with ThreadPoolExecutor(max_workers=gworkers, thread_name_prefix="geom") as ex:
         list(ex.map(lambda p: run_geometry(cfg, p, boxes, global_rot, args.fresh, redo,
                                            args.debug_crops), pages))
+    _build_corrected_pdf(cfg, pages)
     progress = Progress(len(pages))
     results: dict[int, dict] = {}
     workers = max(1, min(config.MAX_WORKERS, len(pages)))
@@ -182,7 +208,7 @@ def run_name_check(cfg, pages, args):
         for fut in as_completed(futs):
             results[futs[fut]] = fut.result()
     _name_report(cfg, pages, results, names)
-    cost.write_report(cfg.out_dir)
+    cost.write_report(cfg.out_dir, cfg.suffix)
     cost.log_summary()
 
 
@@ -197,7 +223,7 @@ def _name_report(cfg, pages, results, roster):
         rows.append([p + 1, mn, r.get("raw_name", ""), r.get("confidence", 0), r.get("problem", "")])
         if mn not in SENT:
             matched.append(mn)
-    out = cfg.out_dir / "name_check.csv"
+    out = cfg.out_dir / f"name_check_{cfg.suffix}.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
@@ -229,7 +255,7 @@ def _apply_name_overrides(cfg, records) -> None:
     ({"<sheet>": "<name>"}). Kept separate from AI caches so re-runs don't lose
     them and the file is an audit trail. Sheet = 1-based page in first_page.pdf.
     """
-    ov = jsonstore.read_json(cfg.out_dir / "name_overrides.json") or {}
+    ov = jsonstore.read_json(cfg.out_dir / f"name_overrides_{cfg.suffix}.json") or {}
     if not ov:
         return
     by_page = {r["page"]: r for r in records}

@@ -10,9 +10,32 @@ from __future__ import annotations
 import logging
 
 import openpyxl
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.layout import Layout, ManualLayout
+from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 import config
+
+PCT_FMT = '0.0"%"'
+_SCORE_SCALE = ColorScaleRule(
+    start_type="num", start_value=0, start_color="F8696B",      # red
+    mid_type="num", mid_value=50, mid_color="FFEB84",           # yellow
+    end_type="num", end_value=100, end_color="63BE7B",          # green
+)
+_THIN = Side(style="thin", color="D9D9D9")
+_BOX = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
+# Homeroom→EMP equivalents (confirmed from sheets where students wrote BOTH
+# notations) — used only to group the Summary's per-class means under EMP1–3.
+_EMP_OF = {"A2801": "EMP1", "A2803": "EMP2", "A2804": "EMP3"}
+_EMP_CLASSES = ("EMP1", "EMP2", "EMP3")
+
+
+def _pin_title_top(chart):
+    """Pin the chart title flush to the top edge (y=0), overlaying the plot."""
+    chart.title.overlay = True
+    chart.title.layout = Layout(manualLayout=ManualLayout(yMode="edge", xMode="edge", x=0.3, y=0.0))
 
 log = logging.getLogger("xuekao")
 
@@ -33,7 +56,10 @@ def _name_disp(rec: dict) -> str:
 
 
 def _class_disp(rec: dict) -> str:
-    return rec["cls"]["class_norm"] or "?"
+    # Never surface internal sentinels in the Class column — a blank field,
+    # unmatched, or unreadable class all show as empty (the label isn't important).
+    norm = rec["cls"]["class_norm"]
+    return "" if norm in ("NONE", "NOMATCH", "UNREADABLE") else (norm or "")
 
 
 def _serial(name: str, roster: list[str]) -> str:
@@ -83,12 +109,16 @@ def _answers_sheet(ws, records, key, roster):
         ws.cell(row=r, column=5 + len(qs), value=score.n_correct).alignment = CENTER
         ws.cell(row=r, column=5 + len(qs) + 1, value=score.total).alignment = CENTER
         pct = round(score.total / total * 100, 1) if total else 0.0
-        ws.cell(row=r, column=5 + len(qs) + 2, value=pct).alignment = CENTER
+        pc = ws.cell(row=r, column=5 + len(qs) + 2, value=pct)
+        pc.alignment = CENTER
+        pc.number_format = PCT_FMT
         r += 1
 
     ws.freeze_panes = "E3"
-    ws.column_dimensions["C"].width = 12
-    ws.column_dimensions["D"].width = 8
+    ws.column_dimensions["C"].width = 14
+    ws.column_dimensions["D"].width = 9
+    for j in range(5, 5 + len(qs)):  # narrow A/B/C/D answer columns
+        ws.column_dimensions[get_column_letter(j)].width = 4.5
 
 
 def _marks_sheet(ws, records, roster, max_points):
@@ -103,9 +133,15 @@ def _marks_sheet(ws, records, roster, max_points):
         flags = "; ".join(_review_flags(rec))
         pct = round(total / max_points * 100, 1) if max_points else 0.0
         ws.append([i, _serial(name, roster), page, name, cls, total, pct, ncorr, flags])
+    last = ws.max_row
+    for row in range(2, last + 1):
+        ws.cell(row=row, column=7).number_format = PCT_FMT
+    if last >= 2:
+        ws.conditional_formatting.add(f"G2:G{last}", _SCORE_SCALE)  # color scale on %
+        ws.auto_filter.ref = f"A1:I{last}"                          # sortable/filterable
     ws.freeze_panes = "A2"
-    ws.column_dimensions["D"].width = 12
-    ws.column_dimensions["I"].width = 40
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["I"].width = 50
 
 
 def _perq_sheet(ws, stats, key):
@@ -113,13 +149,33 @@ def _perq_sheet(ws, stats, key):
     for s in stats:
         ws.append([s["q"], s["correct"], s["points"], s["answered"],
                    s["n_correct"], s["pct"], s["blank"], s["wrong"]])
-        c = ws.cell(row=ws.max_row, column=6)
-        c.fill = GREEN if s["pct"] >= 60 else (YELLOW if s["pct"] >= 35 else RED)
-        c.alignment = CENTER
+        row = ws.max_row
+        for col in range(1, 9):
+            cc = ws.cell(row=row, column=col)
+            cc.alignment = CENTER
+            cc.border = _BOX
+        ws.cell(row=row, column=6).number_format = PCT_FMT
+    data_last = ws.max_row
+    if data_last >= 2:
+        ws.conditional_formatting.add(f"F2:F{data_last}", _SCORE_SCALE)  # smooth gradient
+        ws.auto_filter.ref = f"A1:H{data_last}"
+        chart = BarChart()
+        chart.type = "col"
+        chart.title = "% correct by question"
+        chart.legend = None
+        chart.height, chart.width = 9, 24
+        chart.y_axis.scaling.min, chart.y_axis.scaling.max = 0, 100
+        chart.x_axis.delete = chart.y_axis.delete = False  # keep tick labels + value numbers
+        _pin_title_top(chart)
+        chart.add_data(Reference(ws, min_col=6, min_row=1, max_row=data_last), titles_from_data=True)
+        chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=data_last))
+        ws.add_chart(chart, "J2")
     ws.append([])
     ws.append(["TOTAL", "", key["total_points"], "", "", "", "", ""])
     ws.cell(row=ws.max_row, column=1).font = BOLD
     ws.freeze_panes = "A2"
+    ws.column_dimensions["A"].width = 5
+    ws.column_dimensions["B"].width = 8
 
 
 def _review_flags(rec: dict) -> list[str]:
@@ -194,9 +250,93 @@ def _review_sheet(ws, records, key, roster, low_conf, full_run=True):
             ws.append(["FLAG", _serial(_name_disp(rec), roster), rec["page"],
                        _name_disp(rec), _class_disp(rec), rec["name"]["confidence"],
                        rec["cls"]["confidence"], rec["ans"]["confidence"], "; ".join(flags)])
+    if ws.max_row >= 2:
+        ws.auto_filter.ref = f"A1:I{ws.max_row}"
     ws.freeze_panes = "A2"
     ws.column_dimensions["D"].width = 12
     ws.column_dimensions["I"].width = 70
+
+
+def _summary_sheet(ws, records, key):
+    import statistics as st
+    from collections import defaultdict
+    total = key["total_points"]
+    scores = [r["score"].total for r in records]
+    pcts = [s / total * 100 for s in scores] if total else []
+    n = len(records)
+
+    ws["A1"] = f"{key.get('subject', '')} — {key['total_questions']} MCQ · {total:g} points".lstrip(" —·")
+    ws["A1"].font = Font(bold=True, size=14, color="305496")
+
+    # --- key stats block (A3:B…) ---
+    items = [("Students graded", n, None)]
+    if scores:
+        items += [("Mean score", round(st.mean(scores), 1), None),
+                  ("Mean %", round(st.mean(pcts), 1), PCT_FMT),
+                  ("Median score", round(st.median(scores), 1), None),
+                  ("Highest score", max(scores), None),
+                  ("Lowest score", min(scores), None)]
+    r = 3
+    for label, val, fmt in items:
+        lc = ws.cell(r, 1, label); lc.font = BOLD; lc.fill = GREY; lc.border = _BOX
+        vc = ws.cell(r, 2, val); vc.alignment = CENTER; vc.border = _BOX
+        if fmt:
+            vc.number_format = fmt
+        r += 1
+
+    # --- score distribution (table A-B) + horizontal bar chart ---
+    dist_hdr = r + 1
+    ws.cell(dist_hdr, 1, "Score distribution").font = Font(bold=True, size=12)
+    d0 = dist_hdr + 1
+    bands = [("90–100%", 90, 101), ("80–89%", 80, 90), ("70–79%", 70, 80),
+             ("60–69%", 60, 70), ("50–59%", 50, 60), ("below 50%", 0, 50)]
+    for i, (label, lo, hi) in enumerate(bands):
+        cnt = sum(1 for p in pcts if lo <= p < hi)
+        ws.cell(d0 + i, 1, label).border = _BOX
+        cc = ws.cell(d0 + i, 2, cnt); cc.alignment = CENTER; cc.border = _BOX
+    d_last = d0 + len(bands) - 1
+    ch1 = BarChart()
+    ch1.type, ch1.legend, ch1.title = "bar", None, "Students by score band"
+    ch1.height, ch1.width = 7, 13
+    ch1.x_axis.delete = ch1.y_axis.delete = False
+    _pin_title_top(ch1)
+    ch1.add_data(Reference(ws, min_col=2, min_row=d0, max_row=d_last))
+    ch1.set_categories(Reference(ws, min_col=1, min_row=d0, max_row=d_last))
+    ws.add_chart(ch1, "D2")
+
+    # --- by class (table A-D) + mean-% chart + color scale ---
+    bc_hdr = d_last + 2
+    for j, h in enumerate(("Class", "n", "Mean score", "Mean %"), 1):
+        c = ws.cell(bc_hdr, j, h); c.font = HEADF; c.fill = HEAD; c.alignment = CENTER
+    by = defaultdict(list)
+    for rec in records:
+        emp = _EMP_OF.get(_class_disp(rec), _class_disp(rec))  # merge A28xx→EMP
+        if emp in _EMP_CLASSES:                                # show only EMP classes
+            by[emp].append(rec["score"].total)
+    classes = [c for c in _EMP_CLASSES if c in by]
+    c0 = bc_hdr + 1
+    for i, cls in enumerate(classes):
+        ss = by[cls]
+        mean = round(st.mean(ss), 1)
+        ws.cell(c0 + i, 1, cls).border = _BOX
+        for col, val in ((2, len(ss)), (3, mean)):
+            cc = ws.cell(c0 + i, col, val); cc.alignment = CENTER; cc.border = _BOX
+        pc = ws.cell(c0 + i, 4, round(mean / total * 100, 1) if total else 0)
+        pc.number_format = PCT_FMT; pc.alignment = CENTER; pc.border = _BOX
+    c_last = c0 + len(classes) - 1
+    if c_last >= c0:
+        ws.conditional_formatting.add(f"D{c0}:D{c_last}", _SCORE_SCALE)
+        ch2 = BarChart()
+        ch2.type, ch2.legend, ch2.title = "bar", None, "Mean % by class"
+        ch2.height, ch2.width = 8, 13
+        ch2.x_axis.delete = ch2.y_axis.delete = False
+        _pin_title_top(ch2)
+        ch2.add_data(Reference(ws, min_col=4, min_row=c0, max_row=c_last))
+        ch2.set_categories(Reference(ws, min_col=1, min_row=c0, max_row=c_last))
+        ws.add_chart(ch2, "F18")
+
+    for colw, w in (("A", 18), ("B", 11), ("C", 12), ("D", 10)):
+        ws.column_dimensions[colw].width = w
 
 
 def write_workbook(records, key, stats, roster, out_path, low_conf=None, full_run=True):
@@ -204,9 +344,10 @@ def write_workbook(records, key, stats, roster, out_path, low_conf=None, full_ru
         low_conf = config.LOW_CONFIDENCE
     wb = openpyxl.Workbook()
     _answers_sheet(wb.active, records, key, roster)
-    _marks_sheet(wb.create_sheet("Marks"), records, roster)
+    _marks_sheet(wb.create_sheet("Marks"), records, roster, key["total_points"])
     _perq_sheet(wb.create_sheet("Per-question"), stats, key)
     _review_sheet(wb.create_sheet("Review"), records, key, roster, low_conf, full_run)
+    _summary_sheet(wb.create_sheet("Summary", 0), records, key)  # first tab = overview
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(out_path))
     log.info("wrote %s (%d students)", out_path.name, len(records))

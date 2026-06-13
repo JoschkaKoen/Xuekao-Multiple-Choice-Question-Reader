@@ -49,6 +49,7 @@ ORIENT_DPI = _int("ORIENT_DPI", 150)
 IDENTITY_LONG_EDGE = _int("IDENTITY_LONG_EDGE", 2200)
 MCQ_LONG_EDGE = _int("MCQ_LONG_EDGE", 3000)
 KEY_LONG_EDGE = _int("KEY_LONG_EDGE", 3000)
+CORRECTED_LONG_EDGE = _int("CORRECTED_LONG_EDGE", 3600)  # saved rotation-corrected scan (full @300dpi)
 JPEG_QUALITY = _int("JPEG_QUALITY", 92)
 
 # --- Behaviour --------------------------------------------------------------
@@ -116,12 +117,14 @@ VALID_FOLDERS = ["input_files_1", "input_files_2"]
 @dataclass
 class FolderCfg:
     name: str
+    suffix: str
     first_page: Path
     answer_key: Path
     roster: Path
     out_dir: Path
     cache_dir: Path
     crops_dir: Path
+    corrected_dir: Path
     debug_dir: Path
     log_path: Path
     results_xlsx: Path
@@ -134,13 +137,15 @@ def for_folder(name: str) -> FolderCfg:
     suffix = name.split("_")[-1]  # "1" / "2" from input_files_1 / input_files_2
     return FolderCfg(
         name=name,
+        suffix=suffix,
         first_page=base / "first_page.pdf",
         answer_key=base / "answer_sheet.pdf",
         roster=base / "name_list.xlsx",
         out_dir=out,
         cache_dir=out / "cache",
         crops_dir=out / "crops",
+        corrected_dir=out / "corrected",
         debug_dir=out / "debug",
-        log_path=out / "run.log",
+        log_path=out / f"run_{suffix}.log",
         results_xlsx=out / f"results_{suffix}.xlsx",
     )
